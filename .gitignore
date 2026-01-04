@@ -1,0 +1,10 @@
+*.nsys-rep
+./cse599/*
+trace.json
+*.out
+*.ncu-rep
+*_demo/
+*Demo/
+*demo*/
+*Answer*/
+**/build/*
