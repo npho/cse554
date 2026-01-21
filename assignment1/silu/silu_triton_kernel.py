@@ -51,7 +51,7 @@ def silu_triton(x: torch.Tensor) -> torch.Tensor:
     if not x.is_cuda:
         x = x.to("cuda")
 
-    if not x.contiguous():
+    if not x.is_contiguous():
         x = x.contiguous()
 
     output = torch.empty_like(x) # Allocate result tensor
