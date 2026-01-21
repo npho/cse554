@@ -137,8 +137,6 @@ def benchmark(term_width: int = 80):
     print("-" * term_width)
     print(stdout_runtime)
 
-    print()
-
     # Print bandwidth benchmark results
     print("=" * term_width)
     print("Bandwidth Benchmark")
