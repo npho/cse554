@@ -9,6 +9,12 @@ from torch.profiler import profile, record_function, ProfilerActivity
 def silu(x: torch.Tensor) -> torch.Tensor:
     """
     SiLU (Sigmoid Linear Unit) activation function aka Swish.
+
+    Args:
+        x: Input tensor.
+
+    Returns:
+        Tensor after applying SiLU activation.
     """
     return x / (1 + torch.exp(-x))
 
