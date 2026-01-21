@@ -97,9 +97,11 @@ if __name__ == "__main__":
     print(f"[+] Max difference: {max_diff:.2e}")
     print(f"[+] Test closeness: {status}\n")
 
+    """
     print("=" * term_width)
     print("Torch Profiler Results")
     print("=" * term_width)
 
     # https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html
     print(prof.key_averages().table(sort_by=f"{device}_time_total", row_limit=10))
+    """
