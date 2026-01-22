@@ -1,7 +1,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 
-// Number of threads per block for Quadro RTX 6000
 #define THREADS_PER_BLOCK 256
 
 __global__ void rms_norm_matrix_kernel(
