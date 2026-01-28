@@ -77,10 +77,10 @@ $ ./silu
 SiLU Kernel Tests
 ================================================================================
 CUDA device:    Quadro RTX 6000
-CPU time:       319.1852 ms
-GPU time:       144.8280 ms
-Speedup:        2.20x
-Bandwidth:      3.71 GB/s
+CPU time:       321.3388 ms
+GPU time:       0.9674 ms
+Speedup:        332.16x
+Bandwidth:      554.95 GB/s
 Max error:      1.91e-06
 Status:         PASSED
 
