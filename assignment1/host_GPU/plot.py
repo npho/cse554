@@ -93,8 +93,8 @@ if __name__ == "__main__":
         description="CSE 554 Group 14 Plot memory transfer bandwidth from benchmark results."
     )
     parser.add_argument(
-        "csv_file",
-        nargs="?",
+        "-c",
+        "--csv",
         default="benchmark.csv",
         help="Path to CSV file with benchmark results (default: benchmark.csv).",
     )
@@ -106,4 +106,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    plot_bandwidth(args.csv_file, args.output)
+    plot_bandwidth(args.csv, args.output)
