@@ -15,7 +15,7 @@
 #include <string>
 
 int main(int argc, char* argv[]) {
-    int term_width = 80;
+    const int term_width = 80;
     std::cout << std::string(term_width, '=') << std::endl;
     std::cout << "SiLU Kernel Tests\n";
     std::cout << std::string(term_width, '=') << std::endl;
