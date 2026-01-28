@@ -7,7 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-def plot_bandwidth(csv_file: str, output_file: str) -> None:
+def plot_bandwidth(csv_file: str, page: bool = False, pinned: bool = False, output_file: str = "bandwidth.png") -> None:
     """
     Plot Host-to-GPU and GPU-to-Host bandwidth vs transfer size
     for both pageable and pinned memory.
@@ -24,7 +24,7 @@ def plot_bandwidth(csv_file: str, output_file: str) -> None:
     fig, ax = plt.subplots(figsize=(12, 7))
 
     # Pageable memory
-    if {'h2d_pageable_gbps', 'd2h_pageable_gbps'}.issubset(df.columns):
+    if {'h2d_pageable_gbps', 'd2h_pageable_gbps'}.issubset(df.columns) and page:
         ax.semilogx(
             df["bytes"],
             df["h2d_pageable_gbps"],
@@ -45,7 +45,7 @@ def plot_bandwidth(csv_file: str, output_file: str) -> None:
         )
 
     # Pinned memory
-    if {'h2d_pinned_gbps', 'd2h_pinned_gbps'}.issubset(df.columns):
+    if {'h2d_pinned_gbps', 'd2h_pinned_gbps'}.issubset(df.columns) and pinned:
         ax.semilogx(
             df["bytes"],
             df["h2d_pinned_gbps"],
@@ -84,7 +84,19 @@ def plot_bandwidth(csv_file: str, output_file: str) -> None:
 
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    print(f"Plot saved to: {output_file}")
+    print(f"Plot saved: {output_file}")
+
+    if page:
+        h2d = df[['h2d_pageable_gbps', 'd2h_pageable_gbps']]
+        max_bw = h2d.max()
+        max_tx = h2d.max().idxmax()
+        print(f"Maximum paged: {max_bw[max_tx]:.2f} GB/s ({max_tx})")
+
+    if pinned:
+        d2h = df[['h2d_pinned_gbps', 'd2h_pinned_gbps']]
+        max_bw = d2h.max()
+        max_tx = d2h.max().idxmax()
+        print(f"Maximum pinned: {max_bw[max_tx]:.2f} GB/s ({max_tx})")
 
     return None
 
@@ -99,6 +111,18 @@ if __name__ == "__main__":
         help="Path to CSV file with benchmark results (default: benchmark.csv).",
     )
     parser.add_argument(
+        "--page",
+        default=False,
+        action="store_true",
+        help="Plot pageable memory bandwidth.",
+    )
+    parser.add_argument(
+        "--pinned",
+        default=False,
+        action="store_true",
+        help="Plot pinned memory bandwidth.",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         default="bandwidth.png",
@@ -106,4 +130,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    plot_bandwidth(args.csv, args.output)
+    plot_bandwidth(args.csv, args.page, args.pinned, args.output)
