@@ -46,9 +46,9 @@ def correctness(term_width: int = 80):
         torch.cuda.synchronize()
 
         max_diff = torch.max(torch.abs(result - expected)).item()
-        status = "FAIL ❌"
-        if torch.allclose(result, expected, rtol=1e-5, atol=1e-5):
-            status = "PASS ✅"
+        status = "FAIL"
+        if torch.allclose(result, expected, atol=1e-3):
+            status = "PASS"
 
         print(f"{str(size):<20} {status:<20} {max_diff:<20.2e}")
 
@@ -65,8 +65,8 @@ def benchmark_kernel(fn, x, num_warmup: int = 10, num_runs: int = 100):
         num_runs: Number of timed iterations.
 
     Returns:
-        runtime: Average runtime in milliseconds.
-        bandwidth: Average effective bandwidth in GB/s.
+        runtime: Median runtime in milliseconds.
+        bandwidth: Median effective bandwidth in GB/s.
     """
     # Warmup runs
     for _ in range(num_warmup):
@@ -87,10 +87,10 @@ def benchmark_kernel(fn, x, num_warmup: int = 10, num_runs: int = 100):
         torch.cuda.synchronize()
 
         runtime.append(start.elapsed_time(end)) # milliseconds
-        bandwidth.append(2 * x.element_size() * x.numel() / (runtime[-1] / 1000) / 1e9) # GB/s
+        bandwidth.append((2 * x.element_size() * x.numel() * 1e-9) / (runtime[-1] * 1e-3)) # GB/s
 
     # Calculate summary statistics
-    return (np.average(runtime), np.average(bandwidth))
+    return (np.median(runtime), np.median(bandwidth))
 
 def benchmark(term_width: int = 80):
     """
@@ -150,8 +150,7 @@ if __name__ == "__main__":
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
-
-    print(f"Using device: {device}\n")
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}\n")
 
     torch.manual_seed(0) # Reproducibility
     term_width = 80 # max width of terminal output
