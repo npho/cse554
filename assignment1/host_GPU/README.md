@@ -48,5 +48,15 @@ CUDA Device: Quadro RTX 6000
  1048576       3.748       3.405      11.021      12.030       2.941       3.533
 
 Results saved to: benchmark.csv
+
+================================================================================
+Strided Column Copy Benchmark (copy_first_column)
+================================================================================
+      Matrix: 8192 x 65536 floats (2048.000 MB)
+      Column: 8192 floats (32.000 KB)
+  Iterations: 100
+Average time: 90.35 μs (PASS)
+    Accuracy: 0.00 (PASS)
+
 $
 ```
