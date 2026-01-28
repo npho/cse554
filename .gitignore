@@ -1,4 +1,3 @@
-*.nsys-rep
 ./cse599/*
 trace.json
 *.out
@@ -10,3 +9,4 @@ trace.json
 **/build/*
 *.DS_Store
 __pycache__
+.vscode
