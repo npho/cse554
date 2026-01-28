@@ -31,7 +31,8 @@ def silu_kernel(x1_ptr, x2_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
     # Calculations on GPU
     # SiLU = x * sigmoid(x) = x / (1 + exp(-x))
-    x2 = x1 * tl.sigmoid(x1)
+    #x2 = x1 * tl.sigmoid(x1)
+    x2 = x1 / (1 + tl.exp(-x1))
 
     # Write results back to DRAM
     tl.store(x2_ptr + offsets, x2, mask=mask)
