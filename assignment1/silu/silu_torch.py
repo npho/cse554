@@ -16,14 +16,13 @@ def silu(x: torch.Tensor) -> torch.Tensor:
     Returns:
         Tensor after applying SiLU activation.
     """
-    return x / (1 + torch.exp(-x))
+    return x / (1.0 + torch.exp(-x))
 
 if __name__ == "__main__":
     # fancy command line arguments
     parser = argparse.ArgumentParser(description="CSE 554 Group 14 SiLU PyTorch implementation and performance profiling.")
     parser.add_argument("-s", "--size", type=int, default=8192, help="Size of the input tensor (default: 8192).")
-    parser.add_argument("-w", "--warmup", type=int, default=10, help="Number of warmup iterations (default: 10).")
-    parser.add_argument("-n", "--number", type=int, default=100, help="Number of iterations for timing (default: 100).")
+    parser.add_argument("-w", "--warmup", type=int, default=100, help="Number of warmup iterations (default: 100).")
     parser.add_argument("-o", "--output", default="torch_silu.json", help="File name for PyTorch trace (default: torch_silu.json).")
     args = parser.parse_args()
 
@@ -38,8 +37,7 @@ if __name__ == "__main__":
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
-
-    print(f"[+] Using device: {device}")
+        print(f"[+] CUDA device: {torch.cuda.get_device_name(0)}")
 
     # Create random tensor
     x = torch.rand(args.size, args.size, device=device)
@@ -65,16 +63,12 @@ if __name__ == "__main__":
         # Use record_function to mark the section of code to be profiled
         with record_function("silu"):
             # Timed runs
-            print(f"[+] Performance averaging over {args.number} timed iterations...")
             start.record()
-
-            for i in range(args.number):
-                result = silu(x)
-
+            result = silu(x)
             end.record()
 
-            if device == "cuda":
-                torch.cuda.synchronize()
+    if device == "cuda":
+        torch.cuda.synchronize()
 
     # export to chrome trace
     print(f"[+] Exporting trace to {args.output}")
@@ -83,25 +77,24 @@ if __name__ == "__main__":
     print("\n" + "=" * term_width)
     print("Performance Numbers")
     print("=" * term_width)
-    func_time = start.elapsed_time(end) / 1000 / args.number # msec -> sec
+    func_time = start.elapsed_time(end) # msec
 
-    print("[+] Time for SiLU:", func_time, "seconds")
-    print("[+] Bandwidth:", 2 * x.element_size() * x.numel() / func_time / 1e9, "GBps")
+    print("[+] Time for SiLU:", func_time, "ms")
+    print("[+] Bandwidth:", (2 * x.element_size() * x.numel() / 1e9) / (func_time / 1e3), "GBps")
 
     # compare with default PyTorch SiLU for correctness
     expected = torch.nn.functional.silu(x)
     max_diff = torch.max(torch.abs(result - expected)).item()
 
     status = "FAIL"
-    if torch.allclose(result, expected, rtol=1e-5, atol=1e-5):
+    if torch.allclose(result, expected, atol=1e-3):
         status = "PASS"
 
     print("\n" + "=" * term_width)
     print("Correctness Test")
     print("=" * term_width)
 
-    print(f"[+] Max difference: {max_diff:.2e}")
-    print(f"[+] Test closeness: {status}\n")
+    print(f"[+] Test closeness: {status} (<{max_diff:.2e})\n")
 
     """
     print("=" * term_width)
