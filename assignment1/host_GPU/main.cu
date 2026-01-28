@@ -10,7 +10,10 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
+#include <random>
 #include <vector>
+
+#include "copy_first_column.h"
 
 struct BenchmarkResult {
     size_t bytes;
@@ -152,6 +155,91 @@ int main(int argc, char* argv[]) {
 
     std::cout << std::endl;
     std::cout << "Results saved to: " << output_file << std::endl;
+    std::cout << std::endl;
+
+    //
+    // Benchmark copy_first_column
+    //
+    std::cout << std::string(term_width, '=') << std::endl;
+    std::cout << "Strided Column Copy Benchmark (copy_first_column)" << std::endl;
+    std::cout << std::string(term_width, '=') << std::endl;
+
+    const int ROWS = 8192;
+    const int COLS = 65536;
+    const size_t matrix_bytes = static_cast<size_t>(ROWS) * COLS * sizeof(float);
+    const size_t column_bytes = ROWS * sizeof(float);
+
+    std::cout << "      Matrix: " << ROWS << " x " << COLS << " floats ("
+              << (matrix_bytes / (1024.0 * 1024.0)) << " MB)" << std::endl;
+    std::cout << "      Column: " << ROWS << " floats (" << (column_bytes / 1024.0) << " KB)" << std::endl;
+
+    // Allocate host matrix pageable memory
+    float* h_matrix = static_cast<float*>(malloc(matrix_bytes));
+    if (!h_matrix) {
+        std::cerr << "Failed to allocate host matrix" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    // Initialize the random generator
+    std::default_random_engine gen;
+    std::uniform_real_distribution<float> U(-10.0f, 10.0f); // [-10, 10]
+
+    // Initialize matrix with known random values
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            h_matrix[r * COLS + c] = U(gen);
+        }
+    }
+
+    // Allocate device column buffer
+    float* d_column;
+    cudaMalloc(&d_column, column_bytes);
+
+    // Warm-up call (first call allocates pinned staging buffer)
+    copy_first_column(h_matrix, d_column, ROWS, COLS);
+    cudaDeviceSynchronize();
+
+    // Benchmark with CUDA events for accurate GPU timing
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    const int NUM_ITERATIONS = 100;
+
+    cudaEventRecord(start);
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        copy_first_column(h_matrix, d_column, ROWS, COLS);
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    // Verify speed
+    float total_ms = 0;
+    cudaEventElapsedTime(&total_ms, start, stop);
+    double avg_us = (total_ms * 1000.0) / NUM_ITERATIONS;
+    const char* test_time = avg_us < 100.0 ? "PASS" : "FAIL";
+
+    // Verify correctness, copy result back and check values w/in tolerance
+    std::vector<float> h_result(ROWS);
+    cudaMemcpy(h_result.data(), d_column, column_bytes, cudaMemcpyDeviceToHost);
+
+    float error = 0.0f;
+    for (int r = 0; r < ROWS; r++) {
+        int idx = r * COLS; // First column
+        error += fabsf(h_matrix[idx] - h_result[r]);
+    }
+
+    bool test_acc = error < 1e-3f ? true : false;
+
+    std::cout << "  Iterations: " << NUM_ITERATIONS << std::endl;
+    std::cout << "Average time: " << std::fixed << std::setprecision(2) << avg_us << " μs (" << test_time << ")" << std::endl;
+    std::cout << "    Accuracy: " << error << " (" << (test_acc ? "PASS" : "FAIL") << ")\n" << std::endl;
+
+    // Cleanup
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_column);
+    free(h_matrix);
 
     return 0;
 }
