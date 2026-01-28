@@ -21,11 +21,11 @@ assignment1=(
 
 	# Section 3
 	"host_GPU/main.cu"
-	#"host_GPU/copy_first_column.cu" # TODO
-	#"host_GPU/copy.ncu-rep" # TODO
+	"host_GPU/copy_first_column.cu"
+	"host_GPU/copy.ncu-rep"
 
 	# Report
-	#"hw1-group14.pdf"
+	"hw1-group14.pdf"
 )
 
 echo "Packing up assignment 1..."
