@@ -14,10 +14,10 @@ assignment1=(
 	# Section 2
 	"rms_norm/matrix/rms_norm_matrix.cu"
 	"rms_norm/matrix/main.cu"
-	"profiling/rms_norm_matrix.ncu-rep"
+	"rms_norm/matrix/rms_norm_matrix.ncu-rep"
 	"rms_norm/vector/rms_norm_vector.cu"
 	"rms_norm/vector/main.cu"
-	"profiling/rms_norm_vector.ncu-rep"
+	"rms_norm/vector/rms_norm_vector.ncu-rep"
 
 	# Section 3
 	"host_GPU/main.cu"
@@ -25,7 +25,7 @@ assignment1=(
 	"host_GPU/copy.ncu-rep"
 
 	# Report
-	"hw1-group14.pdf"
+	#"hw1-group14.pdf" # Submitted separately
 )
 
 echo "Packing up assignment 1..."
