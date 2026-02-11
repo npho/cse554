@@ -108,6 +108,26 @@ class Engine:
     def generate(self, input_string, rounds=20):
         input_ids = self.tokenizer.encode(input_string)
 
+        print("Token IDs:", input_ids)
+        output_ids = input_ids.copy()
+
+        new_token = self.run(output_ids)
+        output_ids.append(new_token)
+
+        for round in range(rounds - 1):
+            print(f"Round {round}")
+            new_token = self.run(output_ids, prefill=True)
+            output_ids.append(new_token)
+
+        output_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+        return output_text
+
+    def bench(self, input_string, rounds=20):
+        """
+        The same as provided generate() function but with modifications for benchmarking.
+        """
+        input_ids = self.tokenizer.encode(input_string)
+
         #print("Token IDs:", input_ids)
         output_ids = input_ids.copy()
 
@@ -128,5 +148,5 @@ class Engine:
 if __name__ == "__main__":
     input_string = "Hi, who are you?"
     engine = Engine()
-    _, output_text = engine.generate(input_string, rounds=20)
+    output_text = engine.generate(input_string, rounds=20)
     print("Generated Text:", output_text)
