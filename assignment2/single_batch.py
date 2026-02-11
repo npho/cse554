@@ -273,12 +273,12 @@ class Engine:
         #print("Token IDs:", input_ids)
         output_ids = input_ids.copy()
 
-        new_token = self.run(output_ids)
+        new_token = self.run(output_ids, prefill=True)
         output_ids.append(new_token)
 
         for round in range(rounds - 1):
             #print(f"Round {round}")
-            new_token = self.run(output_ids[-1:], prefill=True)
+            new_token = self.run(output_ids[-1:], prefill=False)
             output_ids.append(new_token)
 
         output_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
