@@ -75,7 +75,8 @@ class Engine:
         lm_head_weight = self.weights["lm_head_weight"]
 
         # Convert input_ids to tensor and get embeddings
-        input_tensor = torch.tensor(input_ids, dtype=torch.int32, device='cuda')
+        #input_tensor = torch.tensor(input_ids, dtype=torch.int32, device='cuda')
+        input_tensor = input_ids.clone().detach().to(dtype=torch.int32, device='cuda')
         hidden_state = embedding[input_tensor]  # (batch, seq_len, hidden_dim)
         batch_size = hidden_state.shape[0]
 

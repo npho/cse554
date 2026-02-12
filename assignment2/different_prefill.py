@@ -80,7 +80,8 @@ class Engine:
         # Concatenate all variable-length sequences into a flat tensor and embed
         batch_size = len(input_ids_list)
         seq_lens = [len(ids) for ids in input_ids_list]
-        all_ids = torch.cat([ids.to(device='cuda') for ids in input_ids_list])
+        #all_ids = torch.cat([ids.to(device='cuda') for ids in input_ids_list])
+        all_ids = torch.cat([ids.clone().detach().to(dtype=torch.int32, device='cuda') for ids in input_ids_list])
         hidden_state = embedding[all_ids]  # (total_tokens, hidden_dim)
 
         #####################
@@ -313,5 +314,21 @@ if __name__ == "__main__":
     for _ in range(10):
         input_string_list.append(another_input_string)
     engine = Engine()
+
+    ### Get total parameter count for homework question.
+    parameters = 0
+    for k, v in engine.weights.items():
+        if k == "embedding":
+            continue
+
+        if isinstance(v, list):
+            for layer in v:
+                parameters += torch.numel(layer)
+        else:
+            parameters += torch.numel(v)
+
+    print(f"llama-3.2-1B parameter count: {parameters}")
+    ###
+
     output_text = engine.generate_batched(input_string_list, rounds=20)
     print("Generated Text:", output_text)
