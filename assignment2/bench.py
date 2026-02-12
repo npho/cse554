@@ -1,4 +1,6 @@
 # bench.py
+# CSE 554 Group 14
+# Code to benchmark KV cache and batched implementations.
 
 import argparse
 import csv
@@ -32,7 +34,7 @@ if __name__ == "__main__":
 	"""
 	if args.question1:
 		print("Running benchmark for Question 1 ...")
-		input_string = "Hi" * 1023 # Actually 1024 tokens
+		input_string = "Hi " * 1023 # Actually 1024 tokens
 		engines = [NoKV(), SingleBatch()]
 		rounds = np.arange(128, 2048+1, 128)
 		#rounds = [10, 20, 30] # DEBUG
@@ -43,7 +45,7 @@ if __name__ == "__main__":
 			for i, r in enumerate(rounds):
 				print(f"Running {engine.__name__} ... ", end="")
 				t0 = time.perf_counter()
-				input_ids, output_text = engine.generate(input_string, rounds=r)
+				input_ids, output_text = engine.bench(input_string, rounds=r)
 				t1 = time.perf_counter()
 				e = t1 - t0
 
@@ -74,7 +76,7 @@ if __name__ == "__main__":
 		print("Running benchmark for Question 2 ...")
 		batch_sizes = [2**i for i in range(7)]
 		engines = [UniformPrefill(), DifferentPrefill()]
-		input_string = "Hi" * 511 # Actually 512 tokens
+		input_string = "Hi " * 511 # Actually 512 tokens
 		rounds = 128
 
 		inputs, outputs, elapsed = [], [], {}
@@ -84,7 +86,7 @@ if __name__ == "__main__":
 				print(f"Running {engine.__name__} ... ", end="")
 				batch_input = [input_string for _ in range(batch_size)]
 				t0 = time.perf_counter()
-				input_ids_list, output_text = engine.generate_batched(batch_input, rounds=rounds)
+				input_ids_list, output_text = engine.bench(batch_input, rounds=rounds)
 				t1 = time.perf_counter()
 				tokens = len(input_ids_list[0]) # Just correctness check first, they're all the same
 				e = t1 - t0
