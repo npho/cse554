@@ -77,23 +77,24 @@ class Engine:
         # hidden representations (embeddings) to the output space
         lm_head_weight = self.weights["lm_head_weight"]
 
-        # Convert input_ids to tensor and get embeddings
-        input_tensor = torch.tensor(input_ids, dtype=torch.int32, device='cuda')
-        hidden_state = embedding[input_tensor]  # (batch, seq_len, hidden_dim)
-        batch_size = hidden_state.shape[0]
+        # Concatenate all variable-length sequences into a flat tensor and embed
+        batch_size = len(input_ids_list)
+        seq_lens = [len(ids) for ids in input_ids_list]
+        all_ids = torch.cat([ids.to(device='cuda') for ids in input_ids_list])
+        hidden_state = embedding[all_ids]  # (total_tokens, hidden_dim)
 
         #####################
         ### BEGIN Prefill ###
         #####################
 
-        # Compute position offset for RoPE
+        # Compute per-sequence position offsets for RoPE
         if prefill:
             # Reset KV cache for new batch of sequences
             self.kv_cache = {}
-            position_offset = 0
+            position_offsets = [0] * batch_size
         else:
-            # Get offset from existing cache (number of cached tokens per sequence)
-            position_offset = self.kv_cache[0]["k"].shape[1]
+            # Each sequence may have a different number of cached tokens
+            position_offsets = [self.kv_cache[0]["k"][b].shape[0] for b in range(batch_size)]
 
         ###################
         ### END Prefill ###
@@ -103,107 +104,116 @@ class Engine:
         for layer in range(self.layers):
             ### Attention Block ###
 
-            # RMSNorm for each vector of user requests
+            # RMSNorm for each vector of user requests (per-token, works on flat tensor)
             rms = torch.sqrt(torch.mean(hidden_state ** 2, dim=-1, keepdim=True) + 1e-5)
             normalized_x = hidden_state / rms
             x = normalized_x * layernormAttn_weight[layer]
 
-            # QKV projections (matmul broadcasts over batch dim)
-            q = x.matmul(self_attn_q_proj_weight[layer].t())  # (batch, seq_len, num_qo_heads * head_dim)
-            k = x.matmul(self_attn_k_proj_weight[layer].t())  # (batch, seq_len, num_kv_heads * head_dim)
-            v = x.matmul(self_attn_v_proj_weight[layer].t())  # (batch, seq_len, num_kv_heads * head_dim)
+            # QKV projections (per-token, works on flat tensor)
+            q = x.matmul(self_attn_q_proj_weight[layer].t())  # (total_tokens, num_qo_heads * head_dim)
+            k = x.matmul(self_attn_k_proj_weight[layer].t())  # (total_tokens, num_kv_heads * head_dim)
+            v = x.matmul(self_attn_v_proj_weight[layer].t())  # (total_tokens, num_kv_heads * head_dim)
 
-            # RoPE (Rotary Positional Embedding) - apply per batch element since apply_rope expects 2D
-            # All sequences share the same position_offset (uniform prefill lengths)
+            # Split Q, K, V per sequence for RoPE and attention (different lengths/offsets)
+            q_list = list(torch.split(q, seq_lens))
+            k_list = list(torch.split(k, seq_lens))
+            v_list = list(torch.split(v, seq_lens))
+
+            # RoPE (Rotary Positional Embedding) - per sequence with its own position offset
             for b in range(batch_size):
-                apply_rope(q[b], output=q[b], head_dim=self.head_dim, offset=position_offset)
-                apply_rope(k[b], output=k[b], head_dim=self.head_dim, offset=position_offset)
+                apply_rope(q_list[b], output=q_list[b], head_dim=self.head_dim, offset=position_offsets[b])
+                apply_rope(k_list[b], output=k_list[b], head_dim=self.head_dim, offset=position_offsets[b])
 
             ######################
             ### BEGIN KV Cache ###
             ######################
 
             if prefill:
-                # Initialize cache for this layer
-                self.kv_cache[layer] = {"k": k, "v": v}
-                k_cache = k
-                v_cache = v
+                # Initialize per-sequence cache for this layer (clone to decouple from flat tensor)
+                self.kv_cache[layer] = {
+                    "k": [k_b.clone() for k_b in k_list],
+                    "v": [v_b.clone() for v_b in v_list]
+                }
             else:
-                # Append new K, V to cache along the sequence dimension (dim=1)
-                k_cache = torch.cat([self.kv_cache[layer]["k"], k], dim=1)
-                v_cache = torch.cat([self.kv_cache[layer]["v"], v], dim=1)
-                self.kv_cache[layer] = {"k": k_cache, "v": v_cache}
+                # Append new K, V to each sequence's cache
+                for b in range(batch_size):
+                    self.kv_cache[layer]["k"][b] = torch.cat([self.kv_cache[layer]["k"][b], k_list[b]], dim=0)
+                    self.kv_cache[layer]["v"][b] = torch.cat([self.kv_cache[layer]["v"][b], v_list[b]], dim=0)
 
             ####################
             ### END KV Cache ###
             ####################
 
-            # Compute sub-components of q, k, v for each head
-            # I: (batch, seq_len, num_qo_heads * head_dim)
-            sub_q = q.view(batch_size, -1, self.num_qo_heads, self.head_dim)        # (batch, q_len, num_qo_heads, head_dim)
-            sub_k = k_cache.view(batch_size, -1, self.num_kv_heads, self.head_dim)  # (batch, kv_len, num_kv_heads, head_dim)
-            sub_v = v_cache.view(batch_size, -1, self.num_kv_heads, self.head_dim)  # (batch, kv_len, num_kv_heads, head_dim)
-
-            # Compute some attention-related values
+            # Attention computed per sequence (different q_len, kv_len, and causal masks)
             scale = 1.0 / (self.head_dim ** 0.5)
             group_size = self.num_qo_heads // self.num_kv_heads
-            # The sequence length for q and k is needed to compute the causal mask [slide]
-            # The below is needed to obtain the dimensions of the attention score matrix
-            n_q = sub_q.shape[1] # Query sequence length
-            n_k = sub_k.shape[1] # Key sequence length (full cached length)
+            attn_outputs = []
 
-            # Replicate sub_k and sub_v for each group of query heads
-            # I: (batch, kv_len, num_kv_heads, head_dim)
-            # O: (batch, kv_len, num_qo_heads, head_dim)
-            sub_k = sub_k.repeat_interleave(group_size, dim=2)
-            sub_v = sub_v.repeat_interleave(group_size, dim=2)
+            for b in range(batch_size):
+                q_b = q_list[b]                                    # (q_len_b, num_qo_heads * head_dim)
+                k_cache_b = self.kv_cache[layer]["k"][b]           # (kv_len_b, num_kv_heads * head_dim)
+                v_cache_b = self.kv_cache[layer]["v"][b]           # (kv_len_b, num_kv_heads * head_dim)
 
-            # Rearrange to (batch, num_qo_heads, seq_len, head_dim) for batched attention
-            sub_q_t = sub_q.permute(0, 2, 1, 3)  # (batch, num_qo_heads, q_len, head_dim)
-            sub_k_t = sub_k.permute(0, 2, 1, 3)  # (batch, num_qo_heads, kv_len, head_dim)
+                # Compute sub-components of q, k, v for each head
+                sub_q = q_b.view(-1, self.num_qo_heads, self.head_dim)        # (q_len_b, num_qo_heads, head_dim)
+                sub_k = k_cache_b.view(-1, self.num_kv_heads, self.head_dim)  # (kv_len_b, num_kv_heads, head_dim)
+                sub_v = v_cache_b.view(-1, self.num_kv_heads, self.head_dim)  # (kv_len_b, num_kv_heads, head_dim)
 
-            # Compute attention scores: (batch, num_qo_heads, q_len, kv_len)
-            scores = torch.matmul(sub_q_t, sub_k_t.transpose(-2, -1)) * scale
+                # The below is needed to obtain the dimensions of the attention score matrix
+                n_q = sub_q.shape[0] # Query sequence length for this sequence
+                n_k = sub_k.shape[0] # Key sequence length (full cached length for this sequence)
 
-            # Create causal mask
-            # Same for all batch elements since all sequences have the same length (uniform prefill)
-            # Shape: (q_len, kv_len) where each query position can attend to positions <= its absolute position
-            causal_mask = torch.ones(n_q, n_k, dtype=torch.bool, device=scores.device)
+                # Replicate sub_k and sub_v for each group of query heads (GQA)
+                sub_k = sub_k.repeat_interleave(group_size, dim=1)
+                sub_v = sub_v.repeat_interleave(group_size, dim=1)
 
-            ###################################
-            ### START KV Cache Prefill Mask ###
-            ###################################
+                # Rearrange to (num_qo_heads, seq_len, head_dim)
+                sub_q_t = sub_q.permute(1, 0, 2)  # (num_qo_heads, q_len_b, head_dim)
+                sub_k_t = sub_k.permute(1, 0, 2)  # (num_qo_heads, kv_len_b, head_dim)
 
-            # Only attend to positions 0 to abs_pos (inclusive)
-            for i in range(n_q):
-                abs_pos = position_offset + i # Absolute position, inclusive of prefill tokens
-                causal_mask[i, abs_pos + 1:] = False # Invert later (still)
+                # Compute attention scores: (num_qo_heads, q_len_b, kv_len_b)
+                scores = torch.matmul(sub_q_t, sub_k_t.transpose(-2, -1)) * scale
 
-            #################################
-            ### END KV Cache Prefill Mask ###
-            #################################
+                # Create causal mask for this sequence
+                causal_mask = torch.ones(n_q, n_k, dtype=torch.bool, device=scores.device)
 
-            # https://pytorch.org/docs/stable/generated/torch.Tensor.masked_fill_.html#torch.Tensor.masked_fill_
-            # Unsqueeze twice: once for batch dim, once for heads dim -> (1, 1, q_len, kv_len)
-            scores = scores.masked_fill(~causal_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+                ###################################
+                ### START KV Cache Prefill Mask ###
+                ###################################
 
-            # Apply softmax along the last dimension (for each query against all keys) to get attention weights
-            attn_weights = torch.softmax(scores, dim=-1)  # (batch, num_qo_heads, q_len, kv_len)
+                # Only attend to positions 0 to abs_pos (inclusive)
+                for i in range(n_q):
+                    abs_pos = position_offsets[b] + i # Absolute position for this sequence
+                    causal_mask[i, abs_pos + 1:] = False # Invert later (still)
 
-            # Compute attention output by multiplying weights with the values
-            v_t = sub_v.permute(0, 2, 1, 3)  # (batch, num_qo_heads, kv_len, head_dim)
-            attn_output = torch.matmul(attn_weights, v_t)  # (batch, num_qo_heads, q_len, head_dim)
+                #################################
+                ### END KV Cache Prefill Mask ###
+                #################################
 
-            # Go back to single-head from multi-head attention. We combine the outputs from all heads
-            attn_output = attn_output.permute(0, 2, 1, 3)  # (batch, q_len, num_qo_heads, head_dim)
-            attn_output = attn_output.reshape(batch_size, -1, self.num_qo_heads * self.head_dim)
+                # https://pytorch.org/docs/stable/generated/torch.Tensor.masked_fill_.html#torch.Tensor.masked_fill_
+                scores = scores.masked_fill(~causal_mask.unsqueeze(0), float("-inf"))
+
+                # Apply softmax along the last dimension (for each query against all keys) to get attention weights
+                attn_weights = torch.softmax(scores, dim=-1)  # (num_qo_heads, q_len_b, kv_len_b)
+
+                # Compute attention output by multiplying weights with the values
+                v_t = sub_v.permute(1, 0, 2)  # (num_qo_heads, kv_len_b, head_dim)
+                attn_out = torch.matmul(attn_weights, v_t)  # (num_qo_heads, q_len_b, head_dim)
+
+                # Go back to single-head from multi-head attention. We combine the outputs from all heads
+                attn_out = attn_out.permute(1, 0, 2)
+                attn_out = attn_out.reshape(-1, self.num_qo_heads * self.head_dim)  # (q_len_b, hidden_dim)
+                attn_outputs.append(attn_out)
+
+            # Concatenate attention outputs back to flat tensor
+            attn_output = torch.cat(attn_outputs, dim=0)  # (total_tokens, hidden_dim)
 
             # Output projection and residual connection
             o_proj_residual = attn_output.matmul(o_proj_weight[layer].t()) + hidden_state
 
             # --- Feed-Forward Network (FFN) ---
 
-            # RMSNorm before FFN
+            # RMSNorm before FFN (per-token, works on flat tensor)
             rms = torch.sqrt(torch.mean(o_proj_residual ** 2, dim=-1, keepdim=True) + 1e-5)
             normalized_x = o_proj_residual / rms
             layernormFFN_output = normalized_x.to(torch.float16) * layernormFFN_weight[layer]
@@ -227,12 +237,18 @@ class Engine:
         model_output = normalized_x.to(torch.float16) * model_layernorm_weight
 
         # Project to vocabulary
-        logits = model_output.matmul(lm_head_weight.t())  # (batch, seq_len, vocab_size)
+        logits = model_output.matmul(lm_head_weight.t())  # (total_tokens, vocab_size)
 
-        # Get the next token for each batch element (argmax of the last position)
-        next_token = torch.argmax(logits[:, -1, :], dim=-1)  # (batch,)
+        # Extract the last token of each sequence from the flat tensor
+        cumsum = 0
+        last_indices = []
+        for s in seq_lens:
+            last_indices.append(cumsum + s - 1)
+            cumsum += s
 
-        return next_token.unsqueeze(1).cpu()  # (batch, 1)
+        next_tokens = torch.argmax(logits[last_indices], dim=-1)  # (batch_size,)
+
+        return next_tokens.cpu()
 
     def generate_batched(self, input_string, rounds=20):
         input_ids_list = []
