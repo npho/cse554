@@ -60,6 +60,8 @@ def q2(csv_file, plot_file):
     df = pd.read_csv(csv_file)
     df["Tokens per Second"] = df["Batch"] * df["Rounds"] / df["Elapsed"]
 
+    df = df[df["Engine"] == "UniformPrefill"]
+
     """
     Plot Runtime
     """
@@ -73,8 +75,8 @@ def q2(csv_file, plot_file):
     ax1.grid(visible=True, linestyle="--", alpha=0.3)
     ax1.tick_params(axis="both", which="both", direction="in")
 
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    ax1.legend(lines1, labels1, loc="upper left")
+    #lines1, labels1 = ax1.get_legend_handles_labels()
+    #ax1.legend(lines1, labels1, loc="upper left")
 
     plt.title("Batched Processing Time")
     plt.tight_layout()
@@ -94,8 +96,8 @@ def q2(csv_file, plot_file):
     ax1.grid(visible=True, linestyle="--", alpha=0.3)
     ax1.tick_params(axis="both", which="both", direction="in")
 
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    ax1.legend(lines1, labels1, loc="upper left")
+    #lines1, labels1 = ax1.get_legend_handles_labels()
+    #ax1.legend(lines1, labels1, loc="upper left")
 
     plt.title("Batched Throughput")
     plt.tight_layout()
