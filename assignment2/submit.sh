@@ -5,6 +5,7 @@ assignment2=(
     "single_batch.py"
 	"uniform_prefill.py"
 	"different_prefill.py"
+	"bench.py"
 
 	# Report
 	#"hw2-group14.pdf" # Submitted separately
