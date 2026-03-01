@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import sys
 
 # Load CSV
 # batch_size,N,K,library,tflops
@@ -26,4 +27,4 @@ for N, K in shapes:
     plt.legend(["CUTLASS", "cuBLAS"])
     plt.tight_layout()
     #plt.show()
-    plt.savefig("hw3-s1-q2a.png", dpi=300, bbox_inches="tight")
+    plt.savefig(sys.argv[1], dpi=300, bbox_inches="tight")
