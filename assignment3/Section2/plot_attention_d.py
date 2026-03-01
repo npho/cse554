@@ -1,9 +1,14 @@
+import math
+
 import flashinfer
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 
+# ---------------------------------------------------------------------------
 # Reference config for each model
+# ---------------------------------------------------------------------------
 llama3_1b_config = {
     "hidden_size": 2048,
     "num_attention_heads": 32,
@@ -22,334 +27,290 @@ llama3_8b_config = {
     "num_key_value_heads": 8
 }
 
+# ---------------------------------------------------------------------------
+# Timing helpers
+# ---------------------------------------------------------------------------
+WARMUP  = 5
+REPEATS = 20
 
-def create_decode_inputs(batch_size, num_qo_heads, num_kv_heads, context_len, head_dim):
-    # Single query token per batch entry, full KV cache of context_len tokens
-    Q = torch.randn(batch_size, num_qo_heads, head_dim,
-                    dtype=torch.float16, device='cuda')
-    K = torch.randn(batch_size, context_len, num_kv_heads, head_dim,
-                    dtype=torch.float16, device='cuda')
-    V = torch.randn(batch_size, context_len, num_kv_heads, head_dim,
-                    dtype=torch.float16, device='cuda')
-    return Q, K, V
-
-
-def benchmark_pytorch_sdpa_decode(Q, K, V, warmup=10, iters=100):
-    # SDPA expects (batch, heads, seq, head_dim)
-    # Q: (batch, num_qo_heads, head_dim) -> (batch, num_qo_heads, 1, head_dim)
-    # K: (batch, context_len, num_kv_heads, head_dim) -> (batch, num_kv_heads, context_len, head_dim)
-    Q_sdpa = Q.unsqueeze(2)
-    K_sdpa = K.permute(0, 2, 1, 3).contiguous()
-    V_sdpa = V.permute(0, 2, 1, 3).contiguous()
-
-    # Warmup
+def cuda_time_ms(fn, warmup=WARMUP, repeats=REPEATS):
+    """Return median kernel wall-time in milliseconds using CUDA events."""
     for _ in range(warmup):
-        _ = torch.nn.functional.scaled_dot_product_attention(Q_sdpa, K_sdpa, V_sdpa,
-                                                             enable_gqa=True)
-
+        fn()
     torch.cuda.synchronize()
     start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
-    start.record()
-    for _ in range(iters):
-        output = torch.nn.functional.scaled_dot_product_attention(Q_sdpa, K_sdpa, V_sdpa,
-                                                                  enable_gqa=True)
-    end.record()
-
-    torch.cuda.synchronize()
-    elapsed_ms = start.elapsed_time(end) / iters
-    return elapsed_ms
+    end   = torch.cuda.Event(enable_timing=True)
+    times = []
+    for _ in range(repeats):
+        start.record()
+        fn()
+        end.record()
+        torch.cuda.synchronize()
+        times.append(start.elapsed_time(end))
+    return float(np.median(times))
 
 
-def benchmark_flashinfer_decode(Q, K, V, warmup=10, iters=100):
-    # single_decode_with_kv_cache expects per-sequence tensors:
-    # q: (num_qo_heads, head_dim)
-    # k: (context_len, num_kv_heads, head_dim)
-    # v: (context_len, num_kv_heads, head_dim)
-    # Loop over the batch dimension to simulate batched decode.
-    batch_size = Q.shape[0]
-
-    def run_batch():
-        for i in range(batch_size):
-            flashinfer.decode.single_decode_with_kv_cache(Q[i], K[i], V[i])
-
-    # Warmup
-    for _ in range(warmup):
-        run_batch()
-
-    torch.cuda.synchronize()
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
-    start.record()
-    for _ in range(iters):
-        run_batch()
-    end.record()
-
-    torch.cuda.synchronize()
-    elapsed_ms = start.elapsed_time(end) / iters
-    return elapsed_ms
-
-
-def compute_memory_bandwidth_GBs_decode(batch_size, context_len, num_qo_heads, num_kv_heads,
-                                        head_dim, time_ms):
-    """Return achieved memory bandwidth in GB/s for a decode attention step.
-
-    Bytes accessed (float16 = 2 bytes per element):
-      - Read  Q:      batch * num_qo_heads * head_dim
-      - Read  K:      batch * context_len  * num_kv_heads * head_dim
-      - Read  V:      batch * context_len  * num_kv_heads * head_dim
-      - Write output: batch * num_qo_heads * head_dim
+def decode_bytes(batch, H_qo, H_kv, context_len, head_dim):
     """
-    bytes_per_elem = 2  # float16
-    q_bytes = batch_size * num_qo_heads * head_dim * bytes_per_elem
-    k_bytes = batch_size * context_len * num_kv_heads * head_dim * bytes_per_elem
-    v_bytes = batch_size * context_len * num_kv_heads * head_dim * bytes_per_elem
-    out_bytes = batch_size * num_qo_heads * head_dim * bytes_per_elem
-    total_bytes = q_bytes + k_bytes + v_bytes + out_bytes
-
-    return total_bytes / (time_ms * 1e-3) / 1e9
-
-
-def benchmark_context_lens(config, context_lens: list[int], batch_size: int):
-    bw_sdpa_by_len: list[float] = []
-    bw_flashinfer_by_len: list[float] = []
-    for context_len in context_lens:
-        print(f"Benchmarking (context_len={context_len}, batch_size={batch_size})...")
-        num_qo_heads = config['num_attention_heads']
-        num_kv_heads = config['num_key_value_heads']
-        head_dim = config['hidden_size'] // num_qo_heads
-
-        Q, K, V = create_decode_inputs(batch_size, num_qo_heads, num_kv_heads, context_len, head_dim)
-
-        time_sdpa = benchmark_pytorch_sdpa_decode(Q, K, V)
-        time_flashinfer = benchmark_flashinfer_decode(Q, K, V)
-
-        bw_sdpa = compute_memory_bandwidth_GBs_decode(
-            batch_size, context_len, num_qo_heads, num_kv_heads, head_dim, time_sdpa)
-        bw_flashinfer = compute_memory_bandwidth_GBs_decode(
-            batch_size, context_len, num_qo_heads, num_kv_heads, head_dim, time_flashinfer)
-
-        print(f"  PyTorch SDPA:  {time_sdpa:.3f} ms | mem bw {bw_sdpa:.2f} GB/s")
-        print(f"  FlashInfer:    {time_flashinfer:.3f} ms | mem bw {bw_flashinfer:.2f} GB/s")
-
-        bw_sdpa_by_len.append(bw_sdpa)
-        bw_flashinfer_by_len.append(bw_flashinfer)
-
-    return bw_sdpa_by_len, bw_flashinfer_by_len
-
-
-def benchmark_batch_sizes_decode(config, batch_sizes: list[int], context_len: int):
-    bw_sdpa_by_batch: list[float] = []
-    bw_flashinfer_by_batch: list[float] = []
-    for batch_size in batch_sizes:
-        print(f"Benchmarking (context_len={context_len}, batch_size={batch_size})...")
-        num_qo_heads = config['num_attention_heads']
-        num_kv_heads = config['num_key_value_heads']
-        head_dim = config['hidden_size'] // num_qo_heads
-
-        Q, K, V = create_decode_inputs(batch_size, num_qo_heads, num_kv_heads, context_len, head_dim)
-
-        time_sdpa = benchmark_pytorch_sdpa_decode(Q, K, V)
-        time_flashinfer = benchmark_flashinfer_decode(Q, K, V)
-
-        bw_sdpa = compute_memory_bandwidth_GBs_decode(
-            batch_size, context_len, num_qo_heads, num_kv_heads, head_dim, time_sdpa)
-        bw_flashinfer = compute_memory_bandwidth_GBs_decode(
-            batch_size, context_len, num_qo_heads, num_kv_heads, head_dim, time_flashinfer)
-
-        print(f"  PyTorch SDPA:  {time_sdpa:.3f} ms | mem bw {bw_sdpa:.2f} GB/s")
-        print(f"  FlashInfer:    {time_flashinfer:.3f} ms | mem bw {bw_flashinfer:.2f} GB/s")
-
-        bw_sdpa_by_batch.append(bw_sdpa)
-        bw_flashinfer_by_batch.append(bw_flashinfer)
-
-    return bw_sdpa_by_batch, bw_flashinfer_by_batch
-
-
-def _add_subplot(ax, xs, sdpa_vals, fi_vals, xlabel, ylabel, title, xscale_base=2):
-    ax.plot(xs, sdpa_vals, label='PyTorch SDPA', marker='o')
-    ax.plot(xs, fi_vals, label='FlashInfer', marker='x')
-    ax.set_xscale('log', base=xscale_base)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_xticks(xs)
-    ax.set_xticklabels([str(v) for v in xs])
-    ax.legend()
-    ax.grid(True, which='both')
-
-
-def benchmark_models_by_context_len():
-    # Context lengths (powers of 2)
-    c_llama3 = 2 ** np.arange(7, 16)   # 2^7 to 2^15
-
-    # Batch size
-    batch_size = 1
-
-    # Benchmark LLAMA3-1B
-    llama3_1b_bw_sdpa, llama3_1b_bw_fi = \
-        benchmark_context_lens(llama3_1b_config, c_llama3, batch_size)
-    # Benchmark LLAMA3-3B
-    llama3_3b_bw_sdpa, llama3_3b_bw_fi = \
-        benchmark_context_lens(llama3_3b_config, c_llama3, batch_size)
-    # Benchmark LLAMA3-8B
-    llama3_8b_bw_sdpa, llama3_8b_bw_fi = \
-        benchmark_context_lens(llama3_8b_config, c_llama3, batch_size)
-
-    models = ['LLaMA3-1B', 'LLaMA3-3B', 'LLaMA3-8B']
-
-    # --- Memory bandwidth plot ---
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-    for ax, sdpa_bw, fi_bw, model in zip(
-            axs,
-            [llama3_1b_bw_sdpa, llama3_3b_bw_sdpa, llama3_8b_bw_sdpa],
-            [llama3_1b_bw_fi, llama3_3b_bw_fi, llama3_8b_bw_fi],
-            models):
-        _add_subplot(ax, c_llama3, sdpa_bw, fi_bw,
-                     xlabel='c (context length)',
-                     ylabel='Memory Bandwidth (GB/s)',
-                     title=model)
-    fig.suptitle('Decode Attention Memory Bandwidth', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig('decode_attention_by_context_len.png', dpi=300)
-    plt.close(fig)
-
-
-def benchmark_models_by_batch_size():
-    # Context length
-    context_len = 1024
-
-    # Batch sizes (powers of 2)
-    batch_sizes = 2 ** np.arange(0, 6)   # 1 to 32
-
-    # Benchmark LLAMA3-1B
-    llama3_1b_bw_sdpa, llama3_1b_bw_fi = \
-        benchmark_batch_sizes_decode(llama3_1b_config, batch_sizes, context_len)
-    # Benchmark LLAMA3-3B
-    llama3_3b_bw_sdpa, llama3_3b_bw_fi = \
-        benchmark_batch_sizes_decode(llama3_3b_config, batch_sizes, context_len)
-    # Benchmark LLAMA3-8B
-    llama3_8b_bw_sdpa, llama3_8b_bw_fi = \
-        benchmark_batch_sizes_decode(llama3_8b_config, batch_sizes, context_len)
-
-    models = ['LLaMA3-1B', 'LLaMA3-3B', 'LLaMA3-8B']
-
-    # --- Memory bandwidth plot ---
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-    for ax, sdpa_bw, fi_bw, model in zip(
-            axs,
-            [llama3_1b_bw_sdpa, llama3_3b_bw_sdpa, llama3_8b_bw_sdpa],
-            [llama3_1b_bw_fi, llama3_3b_bw_fi, llama3_8b_bw_fi],
-            models):
-        _add_subplot(ax, batch_sizes, sdpa_bw, fi_bw,
-                     xlabel='Batch Size',
-                     ylabel='Memory Bandwidth (GB/s)',
-                     title=model)
-    fig.suptitle('Decode Attention Memory Bandwidth by Batch Size', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig('decode_attention_by_batch_size.png', dpi=300)
-    plt.close(fig)
-
-
-def benchmark_flashinfer_paged_decode(batch_size, num_qo_heads, num_kv_heads, context_len,
-                                      head_dim, page_size, warmup=10, iters=100):
-    """Benchmark FlashInfer BatchDecodeWithPagedKVCacheWrapper for a given page size.
-
-    KV cache layout (NHD): [total_pages, 2, page_size, num_kv_heads, head_dim]
-    Q layout: [batch_size, num_qo_heads, head_dim]
+    HBM bytes read during one decode attention step (FP16 = 2 bytes/element).
+      Q  : batch * H_qo * 1 * head_dim
+      K  : batch * H_kv * context_len * head_dim
+      V  : batch * H_kv * context_len * head_dim
     """
-    assert context_len % page_size == 0, "context_len must be divisible by page_size"
-    pages_per_seq = context_len // page_size
-    total_pages = batch_size * pages_per_seq
+    return 2 * (batch * H_qo * head_dim
+                + 2 * batch * H_kv * context_len * head_dim)
 
-    # Build paged KV tensors
-    kv_cache = torch.randn(total_pages, 2, page_size, num_kv_heads, head_dim,
-                           dtype=torch.float16, device='cuda')
-    q = torch.randn(batch_size, num_qo_heads, head_dim,
-                    dtype=torch.float16, device='cuda')
 
-    # Build page table structures
-    indptr = torch.arange(0, batch_size + 1, dtype=torch.int32, device='cuda') * pages_per_seq
-    indices = torch.arange(total_pages, dtype=torch.int32, device='cuda')
-    last_page_len = torch.full((batch_size,), page_size, dtype=torch.int32, device='cuda')
+# ---------------------------------------------------------------------------
+# Benchmark: torch SDPA decode
+# ---------------------------------------------------------------------------
 
-    workspace_buffer = torch.zeros(128 * 1024 * 1024, dtype=torch.uint8, device='cuda')
-    wrapper = flashinfer.decode.BatchDecodeWithPagedKVCacheWrapper(workspace_buffer, "NHD")
-    wrapper.plan(indptr, indices, last_page_len,
-                 num_qo_heads, num_kv_heads, head_dim, page_size,
-                 data_type=torch.float16)
+def bench_torch_sdpa_decode(batch, context_len, H_qo, H_kv, head_dim):
+    """
+    q : (B, H_qo, 1, d)
+    k : (B, H_kv, c, d)
+    v : (B, H_kv, c, d)
+    Returns GB/s, or nan on OOM.
+    """
+    try:
+        q = torch.randn(batch, H_qo, 1,           head_dim, device="cuda", dtype=torch.float16)
+        k = torch.randn(batch, H_kv, context_len, head_dim, device="cuda", dtype=torch.float16)
+        v = torch.randn(batch, H_kv, context_len, head_dim, device="cuda", dtype=torch.float16)
 
-    # Warmup
-    for _ in range(warmup):
+        def run():
+            with torch.no_grad():
+                F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=True)
+
+        t_ms = cuda_time_ms(run)
+        bw   = decode_bytes(batch, H_qo, H_kv, context_len, head_dim)
+        return bw / (t_ms * 1e-3) / 1e9
+    except torch.OutOfMemoryError:
+        print(f"    [torch SDPA OOM at batch={batch}, c={context_len}]")
+        return float("nan")
+    finally:
+        torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Benchmark: FlashInfer paged-KV decode
+# ---------------------------------------------------------------------------
+
+def bench_flashinfer_decode(batch, context_len, H_qo, H_kv, head_dim, page_size=16):
+    """
+    Uses BatchDecodeWithPagedKVCacheWrapper with NHD layout.
+    kv_cache : (total_pages, 2, page_size, H_kv, head_dim)
+    q        : (batch, H_qo, head_dim)
+    Returns GB/s.
+    """
+    workspace     = torch.empty(256 << 20, dtype=torch.uint8, device="cuda")
+    wrapper       = flashinfer.BatchDecodeWithPagedKVCacheWrapper(
+                        workspace, "NHD", use_tensor_cores=True)
+
+    pages_per_req     = math.ceil(context_len / page_size)
+    last_page_len_val = (context_len - 1) % page_size + 1
+    total_pages       = batch * pages_per_req
+
+    kv_cache = torch.randn(total_pages, 2, page_size, H_kv, head_dim,
+                           device="cuda", dtype=torch.float16)
+    q        = torch.randn(batch, H_qo, head_dim, device="cuda", dtype=torch.float16)
+
+    indptr        = torch.arange(0, (batch + 1) * pages_per_req, pages_per_req,
+                                 dtype=torch.int32, device="cuda")
+    indices       = torch.arange(total_pages, dtype=torch.int32, device="cuda")
+    last_page_len = torch.full((batch,), last_page_len_val,
+                               dtype=torch.int32, device="cuda")
+
+    wrapper.plan(
+        indptr,
+        indices,
+        last_page_len,
+        H_qo,
+        H_kv,
+        head_dim,
+        page_size,
+        data_type=torch.float16,
+    )
+
+    def run():
         wrapper.run(q, kv_cache)
 
-    torch.cuda.synchronize()
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
-    start.record()
-    for _ in range(iters):
-        wrapper.run(q, kv_cache)
-    end.record()
-
-    torch.cuda.synchronize()
-    return start.elapsed_time(end) / iters
+    t_ms = cuda_time_ms(run)
+    bw   = decode_bytes(batch, H_qo, H_kv, context_len, head_dim)
+    return bw / (t_ms * 1e-3) / 1e9
 
 
-def benchmark_page_sizes(config, page_sizes: list[int], batch_size: int, context_len: int):
-    bw_by_page_size: list[float] = []
-    for page_size in page_sizes:
-        print(f"Benchmarking (page_size={page_size}, batch_size={batch_size}, "
-              f"context_len={context_len})...")
-        num_qo_heads = config['num_attention_heads']
-        num_kv_heads = config['num_key_value_heads']
-        head_dim = config['hidden_size'] // num_qo_heads
+# ---------------------------------------------------------------------------
+# Sweep helpers
+# ---------------------------------------------------------------------------
 
-        time_ms = benchmark_flashinfer_paged_decode(
-            batch_size, num_qo_heads, num_kv_heads, context_len, head_dim, page_size)
-        bw = compute_memory_bandwidth_GBs_decode(
-            batch_size, context_len, num_qo_heads, num_kv_heads, head_dim, time_ms)
+def sweep_context(config, context_lens, fixed_batch=1, page_size=16):
+    H_qo     = config["num_attention_heads"]
+    H_kv     = config["num_key_value_heads"]
+    head_dim = config["hidden_size"] // H_qo
 
-        print(f"  FlashInfer paged (page_size={page_size}): "
-              f"{time_ms:.3f} ms | mem bw {bw:.2f} GB/s")
-        bw_by_page_size.append(bw)
-    return bw_by_page_size
+    sdpa_bw = []
+    fi_bw   = []
+    for c in context_lens:
+        sdpa_bw.append(bench_torch_sdpa_decode(fixed_batch, c, H_qo, H_kv, head_dim))
+        torch.cuda.empty_cache()
+        fi_bw.append(bench_flashinfer_decode(fixed_batch, c, H_qo, H_kv, head_dim, page_size))
+        torch.cuda.empty_cache()
+        s = f"{sdpa_bw[-1]:.1f}" if not np.isnan(sdpa_bw[-1]) else "OOM"
+        print(f"  c={c:6d}  torch={s} GB/s  fi={fi_bw[-1]:.1f} GB/s")
+    return sdpa_bw, fi_bw
 
 
-def benchmark_models_by_page_size():
-    batch_size = 128
-    context_len = 1024
-    page_sizes = [1, 2, 4, 8, 16]
+def sweep_batch(config, batch_sizes, fixed_context=1024, page_size=16):
+    H_qo     = config["num_attention_heads"]
+    H_kv     = config["num_key_value_heads"]
+    head_dim = config["hidden_size"] // H_qo
 
-    llama3_1b_bw = benchmark_page_sizes(llama3_1b_config, page_sizes, batch_size, context_len)
-    llama3_3b_bw = benchmark_page_sizes(llama3_3b_config, page_sizes, batch_size, context_len)
-    llama3_8b_bw = benchmark_page_sizes(llama3_8b_config, page_sizes, batch_size, context_len)
+    sdpa_bw = []
+    fi_bw   = []
+    for bs in batch_sizes:
+        sdpa_bw.append(bench_torch_sdpa_decode(bs, fixed_context, H_qo, H_kv, head_dim))
+        torch.cuda.empty_cache()
+        fi_bw.append(bench_flashinfer_decode(bs, fixed_context, H_qo, H_kv, head_dim, page_size))
+        torch.cuda.empty_cache()
+        s = f"{sdpa_bw[-1]:.1f}" if not np.isnan(sdpa_bw[-1]) else "OOM"
+        print(f"  bs={bs:4d}  torch={s} GB/s  fi={fi_bw[-1]:.1f} GB/s")
+    return sdpa_bw, fi_bw
 
-    models = ['LLaMA3-1B', 'LLaMA3-3B', 'LLaMA3-8B']
 
+def sweep_page_size(config, page_sizes, fixed_batch=128, fixed_context=1024):
+    H_qo     = config["num_attention_heads"]
+    H_kv     = config["num_key_value_heads"]
+    head_dim = config["hidden_size"] // H_qo
+
+    fi_bw = []
+    for ps in page_sizes:
+        fi_bw.append(bench_flashinfer_decode(fixed_batch, fixed_context, H_qo, H_kv, head_dim, ps))
+        torch.cuda.empty_cache()
+        print(f"  page_size={ps:3d}  fi={fi_bw[-1]:.1f} GB/s")
+    return fi_bw
+
+
+# ---------------------------------------------------------------------------
+# Shared 1×3 subplot helper
+# ---------------------------------------------------------------------------
+
+def plot_1x3(x_vals, data_per_model, x_label, y_label, title, save_path,
+             x_scale="log", x_base=2, sdpa_key="sdpa", fi_key="fi",
+             fi_only=False):
+    """
+    data_per_model: list of 3 dicts, one per model.
+      Each dict must have 'sdpa' and 'fi' lists (or just 'fi' when fi_only=True).
+    """
+    model_names = ["LLaMA3-1B", "LLaMA3-3B", "LLaMA3-8B"]
     fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-    for ax, bw, model in zip(axs, [llama3_1b_bw, llama3_3b_bw, llama3_8b_bw], models):
-        ax.plot(page_sizes, bw, marker='o', label='FlashInfer Paged')
-        ax.set_xscale('log', base=2)
-        ax.set_title(model)
-        ax.set_xlabel('Page Size')
-        ax.set_ylabel('Memory Bandwidth (GB/s)')
-        ax.set_xticks(page_sizes)
-        ax.set_xticklabels([str(p) for p in page_sizes])
+    x_arr = np.array(x_vals)
+
+    for i, (ax, name, data) in enumerate(zip(axs, model_names, data_per_model)):
+        if not fi_only:
+            sdpa_arr = np.array(data[sdpa_key])
+            mask     = ~np.isnan(sdpa_arr)
+            ax.plot(x_arr[mask], sdpa_arr[mask], label="PyTorch SDPA", marker="o")
+        fi_arr = np.array(data[fi_key])
+        ax.plot(x_arr, fi_arr, label="FlashInfer", marker="x")
+
+        if x_scale == "log":
+            ax.set_xscale("log", base=x_base)
+        ax.set_title(name)
+        ax.set_xlabel(x_label)
+        if i == 0:
+            ax.set_ylabel(y_label)
+        ax.set_xticks(x_arr)
+        ax.set_xticklabels([str(v) for v in x_vals])
         ax.legend()
-        ax.grid(True, which='both')
+        ax.grid(True, which="both")
 
-    fig.suptitle(
-        f'Decode Attention Memory Bandwidth by Page Size '
-        f'(batch={batch_size}, context={context_len})',
-        fontsize=16)
+    fig.suptitle(title, fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig('decode_attention_by_page_size.png', dpi=300)
-    plt.close(fig)
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"Saved → {save_path}")
 
 
-benchmark_models_by_context_len()
-benchmark_models_by_batch_size()
-benchmark_models_by_page_size()
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    configs = {
+        "LLaMA3-1B": llama3_1b_config,
+        "LLaMA3-3B": llama3_3b_config,
+        "LLaMA3-8B": llama3_8b_config,
+    }
+
+    # -----------------------------------------------------------------------
+    # Plot 1: vary context length, batch=1
+    # -----------------------------------------------------------------------
+    context_lens = [2**i for i in range(7, 16)]   # 128 … 32768
+    fixed_batch  = 1
+
+    ctx_data = []
+    for name, cfg in configs.items():
+        print(f"\n[Context sweep] {name}")
+        sdpa, fi = sweep_context(cfg, context_lens, fixed_batch=fixed_batch)
+        ctx_data.append({"sdpa": sdpa, "fi": fi})
+    torch.cuda.empty_cache()
+
+    plot_1x3(
+        x_vals         = context_lens,
+        data_per_model = ctx_data,
+        x_label        = "c (context length)",
+        y_label        = "Memory Bandwidth (GB/s)",
+        title          = f"Decode Attention — GB/s vs Context Length  (batch={fixed_batch})",
+        save_path      = "decode_attention_by_context_len.png",
+        x_scale        = "log",
+        x_base         = 2,
+    )
+
+    # -----------------------------------------------------------------------
+    # Plot 2: vary batch size, c=1024
+    # -----------------------------------------------------------------------
+    batch_sizes   = [2**i for i in range(7)]   # 1, 2, …, 64
+    fixed_context = 1024
+
+    batch_data = []
+    for name, cfg in configs.items():
+        print(f"\n[Batch sweep] {name}")
+        sdpa, fi = sweep_batch(cfg, batch_sizes, fixed_context=fixed_context)
+        batch_data.append({"sdpa": sdpa, "fi": fi})
+    torch.cuda.empty_cache()
+
+    plot_1x3(
+        x_vals         = batch_sizes,
+        data_per_model = batch_data,
+        x_label        = "Batch Size",
+        y_label        = "Memory Bandwidth (GB/s)",
+        title          = f"Decode Attention — GB/s vs Batch Size  (c={fixed_context})",
+        save_path      = "decode_attention_by_batch_size.png",
+        x_scale        = "log",
+        x_base         = 2,
+    )
+
+    # -----------------------------------------------------------------------
+    # Plot 3: vary page size, batch=128, c=1024, FlashInfer only
+    # -----------------------------------------------------------------------
+    page_sizes   = [1, 2, 4, 8, 16]
+    fixed_batch  = 128
+    fixed_context = 1024
+
+    ps_data = []
+    for name, cfg in configs.items():
+        print(f"\n[Page-size sweep] {name}")
+        fi = sweep_page_size(cfg, page_sizes, fixed_batch=fixed_batch, fixed_context=fixed_context)
+        ps_data.append({"fi": fi})
+    torch.cuda.empty_cache()
+
+    plot_1x3(
+        x_vals         = page_sizes,
+        data_per_model = ps_data,
+        x_label        = "Page Size",
+        y_label        = "Memory Bandwidth (GB/s)",
+        title          = f"Decode Attention — GB/s vs Page Size  (FlashInfer, batch={fixed_batch}, c={fixed_context})",
+        save_path      = "decode_attention_by_page_size.png",
+        x_scale        = "linear",
+        fi_only        = True,
+    )
