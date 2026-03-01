@@ -7,8 +7,7 @@
 echo "=== Running CUBLAS GEMM profiling ==="
 ./run1_cublas.sh
 
+echo ""
+
 echo "=== Running CUTLASS GEMM profiling ==="
 ./run2_cutlass.sh
-
-echo "=== Plotting results ==="
-python3 plot_gemm.py

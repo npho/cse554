@@ -31,5 +31,6 @@ for M in $(seq 128 128 2048); do
 done
 
 echo ""
-echo "Results written to $OUTPUT"
-#python3 plot_gemm.py
+echo "[*] Results written to $OUTPUT"
+python3 plot_gemm.py hw3-s1-q2a.png
+echo "[*] Plotting results to hw3-s1-q2a.png"
