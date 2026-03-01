@@ -24,8 +24,7 @@ for M in $(seq 128 128 2048); do
             continue
         fi
 
-        # TFLOPS = 2*M*N*K multiply-adds / (time_ms * 1e9)
-        tflops=$(awk "BEGIN { printf \"%.6f\", $M * $N * (2*$K - 1) / ($avg_ms * 1e9) }")
+        tflops=$(awk "BEGIN { printf \"%.6f\", ($M * $N * (2*$K - 1)) / 1e12 / ($avg_ms / 1e3) }")
         echo "$M,$N,$K,$LIBRARY,$tflops" >> "$OUTPUT"
         echo -e "M=$M\tN=$N\tK=$K\tms=${avg_ms}\tTFLOPs=${tflops}"
     done
