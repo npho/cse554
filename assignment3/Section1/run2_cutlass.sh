@@ -39,5 +39,5 @@ done
 
 echo ""
 echo "[*] Results appended to $OUTPUT"
-python3 plot_gemm.py hw3-s1-q2b.png
-echo "[*] Plotting results to hw3-s1-q2b.png"
+python3 plot_gemm.py hw3-s1-q2b-cutlass.png
+echo "[*] Plotting results to hw3-s1-q2b-cutlass.png"
