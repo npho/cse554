@@ -20,7 +20,8 @@ for M in $(seq 128 128 2048); do
     for nk in "${NK_PAIRS[@]}"; do
         read -r N K <<< "$nk"
 
-        output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --kernels=sgemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
+        #output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --kernels=gemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
+        output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --operation=Gemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
 
         # Extract GFLOPs from output
         gflops=$(echo "$output" | grep ^"[1-4]" | awk -F, '{print $NF}' | sort -gr | head -n 1)
