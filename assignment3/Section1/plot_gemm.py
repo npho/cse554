@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import sys
 
 # Load CSV
 # batch_size,N,K,library,tflops
@@ -14,15 +15,16 @@ for N, K in shapes:
     batch_sizes = sorted(shape_df['batch_size'].unique())
 
     plt.figure(figsize=(8, 5))
-    
+
     for lib in ['cutlass', 'cublas']:
         lib_df = shape_df[shape_df['library'] == lib]
         plt.plot(lib_df['batch_size'], lib_df['tflops'], marker='o', label=lib.capitalize())
 
     plt.title(f'Performance for Shape N={N}, K={K}')
     plt.xlabel('Batch Size')
-    plt.ylabel('TFLOPS')
+    plt.ylabel('TFLOPs')
     plt.grid(True)
-    plt.legend()
+    plt.legend(["CUTLASS", "cuBLAS"])
     plt.tight_layout()
-    plt.show()
+    #plt.show()
+    plt.savefig(sys.argv[1], dpi=300, bbox_inches="tight")
