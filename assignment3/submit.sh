@@ -2,13 +2,15 @@
 
 assignment3=(
 	# Section 1
-    "section1/prof_example.cu"
+    "Section1/prof_example.cu"
 
 	# Section 2
-	# TODO
+	"Section2/plot_attention_p.py"
+	"Section2/plot_attention_d.py"
+	"Section2/op_intensity.py"
 
 	# Section 3
-	"section3/flashinfer_pipeline.py"
+	"Section3/flashinfer_pipeline.py"
 
 	# Report
 	#"hw3-group14.pdf" # Submitted separately
