@@ -18,6 +18,8 @@ for i, (N, K) in enumerate(shapes, 1):
 
     for lib in ['cutlass', 'cublas']:
         lib_df = shape_df[shape_df['library'] == lib]
+        lib_df = lib_df.sort_values(by='batch_size')
+        lib_df = lib_df.groupby('batch_size')['tflops'].max().reset_index()
         plt.plot(lib_df['batch_size'], lib_df['tflops'], marker='o', label=lib.capitalize())
 
     plt.title(f'Performance for Shape N={N}, K={K}')
