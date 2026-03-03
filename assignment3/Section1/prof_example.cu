@@ -99,11 +99,11 @@ int main(int argc, char* argv[]) {
                      CUBLAS_OP_N, CUBLAS_OP_N,
                      m, n, k,
                      &alpha,
-                     d_A, CUDA_R_32F, m,
-                     d_B, CUDA_R_32F, k,
+                     d_A, CUDA_R_16F, m,
+                     d_B, CUDA_R_16F, k,
                      &beta,
-                     d_C, CUDA_R_32F, m,
-                     CUBLAS_COMPUTE_32F,
+                     d_C, CUDA_R_16F, m,
+                     CUBLAS_COMPUTE_16F,
                      CUBLAS_GEMM_DEFAULT);
     }
 
@@ -131,11 +131,11 @@ int main(int argc, char* argv[]) {
                      CUBLAS_OP_N, CUBLAS_OP_N,
                      m, n, k,
                      &alpha,
-                     d_A, CUDA_R_32F, m,
-                     d_B, CUDA_R_32F, k,
+                     d_A, CUDA_R_16F, m,
+                     d_B, CUDA_R_16F, k,
                      &beta,
-                     d_C, CUDA_R_32F, m,
-                     CUBLAS_COMPUTE_32F,
+                     d_C, CUDA_R_16F, m,
+                     CUBLAS_COMPUTE_16F,
                      CUBLAS_GEMM_DEFAULT);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
