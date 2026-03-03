@@ -12,5 +12,7 @@ echo ""
 echo "=== Running CUTLASS GEMM profiling ==="
 ./run2_cutlass.sh
 
+echo ""
+
 echo "=== Plot everything ==="
 python3 plot_gemm.py
