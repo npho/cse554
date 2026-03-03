@@ -8,8 +8,7 @@ PROFILER="./cutlass-4.3.5/cmake/tools/profiler/cutlass_profiler"
 OUTPUT="gemm_perf.csv"
 LIBRARY="cutlass"
 
-#declare -a NK_PAIRS=("512 512" "4096 4096" "14336 4096" "4096 1024" "1024 4096")
-declare -a NK_PAIRS=("1024 4096")
+declare -a NK_PAIRS=("512 512" "4096 4096" "14336 4096" "4096 1024" "1024 4096")
 
 # Write header only if the file does not already exist
 if [ ! -f "$OUTPUT" ]; then
@@ -20,8 +19,7 @@ for M in $(seq 128 128 2048); do
     for nk in "${NK_PAIRS[@]}"; do
         read -r N K <<< "$nk"
 
-        #output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --kernels=gemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
-        output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --operation=Gemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
+        output=$("$PROFILER" --seed=0 --profiling-iterations=100 --split_k_slices=1,2,4,8 --split_k_mode=serial --A=f16:column --B=f16:column --C=f16:column --accum=f16 --operation=Gemm --m="$M" --n="$N" --k="$K" 2>/dev/null)
 
         # Extract GFLOPs from output
         gflops=$(echo "$output" | grep ^"[1-4]" | awk -F, '{print $NF}' | sort -gr | head -n 1)
@@ -39,6 +37,4 @@ for M in $(seq 128 128 2048); do
 done
 
 echo ""
-echo "[*] Results appended to $OUTPUT"
-python3 plot_gemm.py hw3-s1-q2b-cutlass.png
-echo "[*] Plotting results to hw3-s1-q2b-cutlass.png"
+echo "[*] Results written to $OUTPUT"
