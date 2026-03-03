@@ -10,7 +10,7 @@ df = pd.read_csv('gemm_perf.csv')
 shapes = df[['N', 'K']].drop_duplicates().values.tolist()
 
 # Plot for each shape
-for N, K in shapes:
+for i, (N, K) in enumerate(shapes, 1):
     shape_df = df[(df['N'] == N) & (df['K'] == K)]
     batch_sizes = sorted(shape_df['batch_size'].unique())
 
@@ -27,4 +27,6 @@ for N, K in shapes:
     plt.legend(["CUTLASS", "cuBLAS"])
     plt.tight_layout()
     #plt.show()
-    plt.savefig(sys.argv[1], dpi=300, bbox_inches="tight")
+    out = f"hw3-s1-q2-{i}.png"
+    plt.savefig(out, dpi=300, bbox_inches="tight")
+    print(f"[*] Saved plot for N={N}, K={K} as {out}")
