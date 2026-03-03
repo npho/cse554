@@ -1,4 +1,3 @@
-*.nsys-rep
 ./cse599/*
 trace.json
 *.out
@@ -9,3 +8,11 @@ trace.json
 *Answer*/
 **/build/*
 *.DS_Store
+__pycache__
+.vscode
+*.zip
+Llama-3.2-1B
+.env/
+cutlass-*
+prof_example
+*.tar.gz
