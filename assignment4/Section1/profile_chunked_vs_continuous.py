@@ -212,25 +212,27 @@ if __name__ == "__main__":
         print(f"continuous is {1/speedup:.3f}x faster than chunked prefill")
 
     # ---- Scatter plot of per-iteration times ------------------------------
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
+    # Skip iteration 0: it includes initial prefill/JIT warm-up that dwarfs
+    # steady-state decode iterations and squashes the rest of the y-axis.
+    c_ms = [t * 1000 for t in continuous_iter_times[1:]]
+    k_ms = [t * 1000 for t in chunked_iter_times[1:]]
 
-    c_ms = [t * 1000 for t in continuous_iter_times]
-    k_ms = [t * 1000 for t in chunked_iter_times]
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     axes[0].scatter(range(len(c_ms)), c_ms, s=4, alpha=0.6, color="steelblue")
-    axes[0].set_title(f"Continuous batching\n(batch≤{CONTINUOUS_BATCH_SIZE} reqs, {len(c_ms)} iters)")
-    axes[0].set_xlabel("Iteration ID")
-    axes[0].set_ylabel("Iteration time (ms)")
-    axes[0].axhline(np.median(c_ms), color="red", linewidth=1, linestyle="--",
+    axes[0].axhline(np.median(c_ms), color="steelblue", linewidth=1, linestyle="--",
                     label=f"median={np.median(c_ms):.1f}ms")
+    axes[0].set_title(f"Continuous batching (batch≤{CONTINUOUS_BATCH_SIZE} reqs)\n{len(c_ms)} iterations")
+    axes[0].set_xlabel("Iteration ID (excluding iter 0)")
+    axes[0].set_ylabel("Iteration time (ms)")
     axes[0].legend(fontsize=9)
 
     axes[1].scatter(range(len(k_ms)), k_ms, s=4, alpha=0.6, color="darkorange")
-    axes[1].set_title(f"Chunked prefill\n(token budget={CHUNKED_TOKEN_BATCH_SIZE}, {len(k_ms)} iters)")
-    axes[1].set_xlabel("Iteration ID")
-    axes[1].set_ylabel("Iteration time (ms)")
-    axes[1].axhline(np.median(k_ms), color="red", linewidth=1, linestyle="--",
+    axes[1].axhline(np.median(k_ms), color="darkorange", linewidth=1, linestyle="--",
                     label=f"median={np.median(k_ms):.1f}ms")
+    axes[1].set_title(f"Chunked prefill (token budget={CHUNKED_TOKEN_BATCH_SIZE})\n{len(k_ms)} iterations")
+    axes[1].set_xlabel("Iteration ID (excluding iter 0)")
+    axes[1].set_ylabel("Iteration time (ms)")
     axes[1].legend(fontsize=9)
 
     fig.suptitle(
