@@ -9,6 +9,7 @@ import statistics
 import time
 from dataclasses import dataclass
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
@@ -75,11 +76,16 @@ def run_continuous(engine, specs, batch_size):
     for i, spec in enumerate(specs):
         text = engine.tokenizer.decode(spec.prompt_ids.tolist(), skip_special_tokens=True)
         scheduler.add_req(InputRequest(text, spec.output_len))
+    iter_times: list[float] = []
     while not scheduler.finished():
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
         scheduler.run()
+        torch.cuda.synchronize()
+        iter_times.append(time.perf_counter() - t0)
     for req in scheduler.completed:
         _release(engine, req.request_id)
-    return len(scheduler.completed)
+    return len(scheduler.completed), iter_times
 
 # ---------------------------------------------------------------------------
 # Chunked-prefill runner (via Scheduler)
@@ -88,35 +94,39 @@ def run_chunked(
     engine: ChunkedEngine,
     specs: list[RequestSpec],
     token_batch_size: int,
-) -> int:
+) -> tuple[int, list[float]]:
     scheduler = ChunkedScheduler(engine, token_batch_size=token_batch_size)
 
     for i, spec in enumerate(specs):
         text = engine.tokenizer.decode(spec.prompt_ids.tolist(), skip_special_tokens=True)
         scheduler.add_req(InputRequest(text, spec.output_len))
 
+    iter_times: list[float] = []
     while not scheduler.finished():
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
         scheduler.run()
+        torch.cuda.synchronize()
+        iter_times.append(time.perf_counter() - t0)
 
-    # release KV caches for completed requests
     for req in scheduler.completed:
         _release(engine, req.request_id)
 
-    return len(scheduler.completed)
+    return len(scheduler.completed), iter_times
 
 
 # ---------------------------------------------------------------------------
 # Timed wrapper
 # ---------------------------------------------------------------------------
-def time_run(name: str, fn, engine) -> float:
+def time_run(name: str, fn, engine) -> tuple[float, list[float]]:
     reset_engine(engine)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
-    completed = fn()
+    completed, iter_times = fn()
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
-    print(f"  [{name}] completed={completed}  time={elapsed:.3f}s")
-    return elapsed
+    print(f"  [{name}] completed={completed}  time={elapsed:.3f}s  iters={len(iter_times)}")
+    return elapsed, iter_times
 
 
 # ---------------------------------------------------------------------------
@@ -149,13 +159,15 @@ if __name__ == "__main__":
 
     print(f"\nBenchmark continuous ({TRIALS} trial(s))...")
     continuous_times: list[float] = []
+    continuous_iter_times: list[float] = []
     for trial in range(TRIALS):
-        ct = time_run(
+        ct, cit = time_run(
             f"continuous trial {trial+1}",
             lambda: run_continuous(c_engine, specs, CONTINUOUS_BATCH_SIZE),
             c_engine,
         )
         continuous_times.append(ct)
+        continuous_iter_times = cit  # keep last trial
 
     # Free GPU memory before loading chunked engine
     reset_engine(c_engine)
@@ -172,13 +184,15 @@ if __name__ == "__main__":
 
     print(f"\nBenchmark chunked ({TRIALS} trial(s))...")
     chunked_times: list[float] = []
+    chunked_iter_times: list[float] = []
     for trial in range(TRIALS):
-        kt = time_run(
+        kt, kit = time_run(
             f"chunked   trial {trial+1}",
             lambda: run_chunked(k_engine, specs, CHUNKED_TOKEN_BATCH_SIZE),
             k_engine,
         )
         chunked_times.append(kt)
+        chunked_iter_times = kit  # keep last trial
 
     cont_median = statistics.median(continuous_times)
     chun_median = statistics.median(chunked_times)
@@ -196,3 +210,36 @@ if __name__ == "__main__":
         print(f"chunked is {speedup:.3f}x faster than continuous batching")
     else:
         print(f"continuous is {1/speedup:.3f}x faster than chunked prefill")
+
+    # ---- Scatter plot of per-iteration times ------------------------------
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
+
+    c_ms = [t * 1000 for t in continuous_iter_times]
+    k_ms = [t * 1000 for t in chunked_iter_times]
+
+    axes[0].scatter(range(len(c_ms)), c_ms, s=4, alpha=0.6, color="steelblue")
+    axes[0].set_title(f"Continuous batching\n(batch≤{CONTINUOUS_BATCH_SIZE} reqs, {len(c_ms)} iters)")
+    axes[0].set_xlabel("Iteration ID")
+    axes[0].set_ylabel("Iteration time (ms)")
+    axes[0].axhline(np.median(c_ms), color="red", linewidth=1, linestyle="--",
+                    label=f"median={np.median(c_ms):.1f}ms")
+    axes[0].legend(fontsize=9)
+
+    axes[1].scatter(range(len(k_ms)), k_ms, s=4, alpha=0.6, color="darkorange")
+    axes[1].set_title(f"Chunked prefill\n(token budget={CHUNKED_TOKEN_BATCH_SIZE}, {len(k_ms)} iters)")
+    axes[1].set_xlabel("Iteration ID")
+    axes[1].set_ylabel("Iteration time (ms)")
+    axes[1].axhline(np.median(k_ms), color="red", linewidth=1, linestyle="--",
+                    label=f"median={np.median(k_ms):.1f}ms")
+    axes[1].legend(fontsize=9)
+
+    fig.suptitle(
+        f"Per-iteration time: continuous batching vs chunked prefill\n"
+        f"({NUM_REQUESTS} reqs, lognormal prompts μ=6 σ=0.7, uniform outputs [1,512])",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    out_path = "assignment4/Section1/iter_time_scatter.png"
+    plt.savefig(out_path, dpi=150)
+    print(f"\nPlot saved to {out_path}")
+    plt.close()
