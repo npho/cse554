@@ -53,30 +53,56 @@ class Scheduler:
         # Limit the budget, and chunk the request as necessary.
         # If a request is chunked, keep it still in the pending prefill queue. Otherwise, remove from the queue.
         # Set tokens of the current chunk in the request scheduling_pf_tokens and set remaining_prefill_tokens properly
-        #########
-        # FIXME #
-        #########
+        while self.pending_prefill and available_budget > 0:
+            req = self.pending_prefill[0]
+            chunk_size = min(req.remaining_prefill_tokens, available_budget)
+            start = req.prompt_length - req.remaining_prefill_tokens
+            req.scheduling_pf_tokens = req.prompt_token_ids[start:start + chunk_size]
+            req.remaining_prefill_tokens -= chunk_size
+            available_budget -= chunk_size
+            if req.remaining_prefill_tokens == 0:
+                req.last_chunk = True
+                self.pending_prefill.pop(0)
+            else:
+                req.last_chunk = False
+            self.scheduled_prefill_req.append(req)
             
         # Build the list of requests to send to the engine
-        #########
-        # FIXME #
-        #########
+        if not self.decode_req and not self.scheduled_prefill_req:
+            return
+
+        request_list_total = []
+        decode_num = 0
+        request_list_total.extend(self.decode_req)
+        decode_num = len(self.decode_req)
+        request_list_total.extend(self.scheduled_prefill_req)
+        new_tokens = self.engine.run(request_list_total, decode_num)
 
         # Append newly generated tokens to each request's output buffer
         # For prefill, only append if this cycle is the last chunk
-        #########
-        # FIXME #
-        #########
+        for idx, (req, token) in enumerate(zip(request_list_total, new_tokens)):
+            if idx < decode_num or req.last_chunk:
+                req.output_token_ids = torch.cat((req.output_token_ids, token.view(1)))
 
         # Check which decode requests have finished
-        #########
-        # FIXME #
-        #########
+        ongoing_decode: list[Request] = []
+        for req in self.decode_req:
+            generated_tokens = req.current_length - req.prompt_length
+            if generated_tokens >= req.output_length:
+                self.completed.append(req)
+            else:
+                ongoing_decode.append(req)
+        self.decode_req = ongoing_decode
 
         # Move scheduled prefill requests into decode queue
-        #########
-        # FIXME #
-        #########
+        for req in self.scheduled_prefill_req:
+            if req.last_chunk:
+                generated_tokens = req.current_length - req.prompt_length
+                if generated_tokens >= req.output_length:
+                    self.completed.append(req)
+                else:
+                    self.decode_req.append(req)
+        self.scheduled_prefill_req = []
     
     def print_completed(self):
         for i, req in enumerate(self.completed):

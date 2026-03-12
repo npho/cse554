@@ -27,34 +27,50 @@ class Scheduler:
 
     def run(self):
         # Schedule new prefill requests until batch is full or no pending inputs
-        #########
-        # FIXME #
-        #########
+        while self.pending_input_req and self.get_req_batch_size() < self.req_batch_size:
+            pending_req = self.pending_input_req.pop(0)
+            prompt_ids = self.engine.tokenizer(
+                pending_req.input_str, return_tensors="pt"
+            ).input_ids[0]
+            req = Request(self.unique_req_id, prompt_ids, pending_req.output_len)
+            self.unique_req_id += 1
+            self.scheduled_prefill_req.append(req)
+
+        if not self.decode_req and not self.scheduled_prefill_req:
+            return
 
         # Build the list of requests to send to the engine
         request_list_total = []
         decode_num = 0
-        #########
-        # FIXME #
-        #########
+        request_list_total.extend(self.decode_req)
+        decode_num = len(self.decode_req)
+        request_list_total.extend(self.scheduled_prefill_req)
         new_tokens = self.engine.run(request_list_total, decode_num)
 
         # Append newly generated tokens to each request's output buffer
-        #########
-        # FIXME #
-        #########
+        for req, token in zip(request_list_total, new_tokens):
+            req.output_token_ids = torch.cat((req.output_token_ids, token.view(1)))
 
         # Check which decode requests have finished and remove from the queue
         ongoing_decode: list[Request] = []
-        #########
-        # FIXME #
-        #########
+        for req in self.decode_req:
+            generated_tokens = req.current_length - req.prompt_length
+            if generated_tokens >= req.output_length:
+                self.completed.append(req)
+            else:
+                ongoing_decode.append(req)
         self.decode_req = ongoing_decode
 
         # Move scheduled prefill requests into decode queue
-        #########
-        # FIXME #
-        #########
+        promoted_decode: list[Request] = []
+        for req in self.scheduled_prefill_req:
+            generated_tokens = req.current_length - req.prompt_length
+            if generated_tokens >= req.output_length:
+                self.completed.append(req)
+            else:
+                promoted_decode.append(req)
+        self.decode_req.extend(promoted_decode)
+        self.scheduled_prefill_req = []
     
     def print_completed(self):
         for i, req in enumerate(self.completed):
