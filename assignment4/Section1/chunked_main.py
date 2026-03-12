@@ -15,10 +15,10 @@ sample_prompts = ["Today is a rainy day"] * 1024 + ["UW is"] * 1024
 # Enqueue and run
 for prompt in sample_prompts:
     scheduler.add_req(InputRequest(prompt, output_len=100))
-    # scheduler.run()
+    scheduler.run()
 
 # Drain remaining requests
 while not scheduler.finished():
     scheduler.run()
 
-# scheduler.print_completed()
+scheduler.print_completed()
