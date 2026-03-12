@@ -19,7 +19,7 @@ def init_distributed(rank, world_size):
 def run(rank, world_size, return_dict):
     init_distributed(rank, world_size)
     results = []
-    
+
     # do a warm up
     for b in BATCH_SIZES:
         x = torch.randn(b, SEQ_LEN, HIDDEN_DIM, device='cuda')
@@ -70,7 +70,7 @@ def main():
         plt.grid(True)
         # plt.xscale('log', base=2)
         plt.tight_layout()
-        plt.savefig('profile_allreduce.png')
+        plt.savefig('profile_allreduce.png', dpi=300)
 
 if __name__ == "__main__":
     main()
