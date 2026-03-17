@@ -22,7 +22,7 @@
 \hypersetup{
     colorlinks=true,
     linkcolor=blue,
-    filecolor=magenta,      
+    filecolor=magenta,
     urlcolor=blue,
 }
 
@@ -51,13 +51,13 @@
     \item \textbf{Conceptual Understanding}
     \begin{enumerate}
         \item What are the use cases of SiLU in Large Language Models (LLMs)?
-        
+
         SiLU was shown to have improved accuracy over the original ReLU activation function and other (at the time) commonly used non-linearity functions \cite{silu}. SiLU is sometimes referred to as ``swish'' and it was combined with GLU resulting in the SwiGLU activation function \cite{swiglu}. \citeauthor{swiglu} demonstrated that the SwiGLU function deployed within the transformer architecture improved model quality. SwiGLU was adopted as the primary transformer activation function in modern LLMs, such as Llama 3 \cite{llama3}.
 
         %\printbibliography[heading=subbibintoc]
-        
+
         \item What is the mathematical formula for the SiLU function?
-        
+
         \begin{equation}
             \text{SiLU}\left(x\right) = x \cdot \sigma\left(x\right) = \frac{x}{1 + \exp\left(-x\right)}
         \end{equation}
@@ -88,11 +88,11 @@ Correctness Test
 ===================================================================
 [+] Test closeness: PASS (<0.00e+00)
 
-$                
+$
         \end{verbatim}
-            
+
         %Performance profiling of the \texttt{silu\_torch.py} implementation using the native Torch profiler (Figure \ref{fig:silu-torch}) and the NVIDIA nsight profiler (Figure \ref{fig:silu-nsight}).
-        
+
         \begin{figure}[H]
             \centering
             \includegraphics[width=1\linewidth]{fig/hw1-s1-q2-torch.png}
@@ -106,26 +106,26 @@ $
             \caption{Performance profiling our SiLU implementation using NVIDIA Nsight Systems.}
             \label{fig:silu-nsight}
         \end{figure}
-        
+
         \item
-        
+
         \begin{enumerate}
             \item What kernels are being launched?
 
             There were 17 total non-unique kernel launches but the most notable ones are step applications for the SiLU function. For example, the SiLU argument is first negated with the \texttt{neg\_kernel\_cuda} kernel. Before then being added to a constant with the \texttt{CUDAFunctor\_add} kernel, the negated argument is exponentiated with the \texttt{exp\_kernel\_cuda} kernel. There are other less clear cut kernel calls such as \texttt{BinaryFunctor}, \texttt{AbsFunctor}, \texttt{CompareFunctor}, \texttt{AUnaryFunctor}, \texttt{distribution\_elementwise\_grid\_stride\_kernel}, and \texttt{ReduceOp}.
-            
+
             \item What is the minimum number (discount repetition and intermediate results) of memory accesses necessary (read and write) to accomplish the task?
 
             There are \textbf{two memory accesses} necessary, \underline{one load} and \underline{one store}.
-            
-            \item What is the bandwidth usage (minimum number of necessary memory accesses / total execution time) of SiLU? 
+
+            \item What is the bandwidth usage (minimum number of necessary memory accesses / total execution time) of SiLU?
             \begin{align*}
                 \frac{\text{\# Accesses} \cdot \text{Data Size}}{\text{Execution Time}} &= \frac{2 \cdot 4 \cdot 8192 \cdot 8192 \cdot 10^{-9}}{4.43 \cdot 10^{-3}} \approx \boxed{ 121.28 \text{ GBps} }
             \end{align*}
             Two memory accesses (i.e., one load and one store), for a tensor array of $8192 \times 8192$ elements with 32-bit floating point (i.e., 4 Byte) representation running for approximately 4.43 ms per function call.
-        \end{enumerate}  
+        \end{enumerate}
     \end{enumerate}
-    
+
     \item \textbf{Triton}
     Implement the SiLU function using Triton in \texttt{silu/silu\_triton\_kernel.py}. Test the kernel and report the timing and bandwidth.
 
@@ -169,7 +169,7 @@ $
     \end{verbatim}
     \item \textbf{CUDA}
     Implement the kernel in \texttt{silu/CUDA/silu.cu}. Use NVIDIA Nsight Compute (ncu) for analysis (\texttt{cuda\_silu.ncu-rep}). Optimize the kernel to achieve bandwidth utilization $>500$ GBps.
-    
+
     The final run took \textbf{0.9720 ms} and utilized \textbf{552.35 GBps} of bandwidth.
     \begin{verbatim}
 $ ./silu
@@ -207,7 +207,7 @@ $
     Implement a CUDA kernel for an $(8192, 8192)$ matrix. Optimize for bandwidth \textbf{$> 300$ GB/s} (\texttt{rms\_norm\_matrix.ncu-rep}).
 
     The optimized kernel executes in \textbf{0.92 seconds} and achives \textbf{573 GB/s} of memory throughput according to Nsight Compute.
-    
+
     \item \textbf{Vector Kernel Implementation}
     Implement a CUDA kernel for a vector of shape $(1, 1024 \times 1024)$. Optimize for bandwidth \textbf{$> 200$ GB/s} (\texttt{rms\_norm\_vector.ncu-rep}).
 
@@ -270,7 +270,7 @@ Generating '/tmp/nsys-report-a2cf.qdstrm'
 Generated:
         /mmfs1/gscratch/scrubbed/npho/cse554/assignment1/host_GPU/
         build/copy.nsys-rep
-$        
+$
     \end{verbatim}
 
     The idea is that while using pinned memory may be an attractive idea in this case, the overhead to allocate pinned memory is high. In instances where the relative compute for a given data size is very high, it makes sense to take the pinned memory overhead. For example, the benchmarking done on pinned versus paged memory (Figure \ref{fig:pinned}) demonstrated that the benefit of pinned over paged memory only occurs at larger data transfer sizes. For the smaller sizes we have the bandwidth difference is negligible but we still incur the overhead penalty of allocated the pinned memory. In the simple first column copy situation, the cost is outweighed by a simple paged memory allocation and coalescing the columns.
