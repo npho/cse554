@@ -37,6 +37,6 @@ uv pip install -r requirements.txt --cache-dir /tmp/uv-cache
 | Feb 25, 2026 | Batching | [[PPTX](slides/cse554-l13_batching.pptx)] [[PDF](slides/cse554-l13_batching.pdf)] | |
 | Mar 2, 2026 | Parallelism-1 | [[PPTX](slides/cse554-l14_parallelism1.pptx)] [[PDF](slides/cse554-l14_parallelism1.pdf)] [[Megatron-LM](https://arxiv.org/pdf/2104.04473)] [[Zero Bubble Pipeline Parallel](https://arxiv.org/pdf/2401.10241)] | HW3 Due, HW4 Out |
 | Mar 4, 2026 | Parallelism-2 | [[PPTX](slides/cse554-l15_parallelism2.pptx)] [[PDF](slides/cse554-l15_parallelism2.pdf)] [[Megatron-LM, Sequence Parallel](https://arxiv.org/pdf/2205.05198)] [[DeepSpeed-Ulysses](https://arxiv.org/pdf/2309.14509)] | |
-| Mar 9, 2026 | RL for LLMs | | |
-| Mar 11, 2026 | Agentic Systems | | |
+| Mar 9, 2026 | RL for LLMs | [[PPTX](slides/cse554-l16_rl.pptx)] [[PDF](slides/cse554-l16_rl.pdf)] | |
+| Mar 11, 2026 | Agentic Systems | [[PPTX](slides/cse554-l17_agents.pptx)] [[PDF](slides/cse554-l17_agents.pdf)] | |
 | Mar 13, 2026 | | | HW4 Due |
